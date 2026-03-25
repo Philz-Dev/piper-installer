@@ -39,7 +39,7 @@ docker pull ghcr.io/philz-dev/piper-engine:v1
 # 4. Create the Global CLI Wrapper (The "Magic" Link)
 echo "🛠️  Installing 'piper' command globally..."
 
-# Create the wrapper locally first to avoid /tmp permission issues in MINGW64
+# Create the wrapper locally first to avoid /tmp permission issues
 cat <<EOF > ./piper_wrapper
 #!/bin/bash
 # Wrapper for Piper Engine Docker Container
@@ -49,23 +49,30 @@ docker run --rm -it \
   ghcr.io/philz-dev/piper-engine:v1 "\$@"
 EOF
 
-# Ensure the destination directory exists and move the wrapper
+# Determine the best installation path based on environment
 if [ -x "$(command -v sudo)" ]; then
-    sudo mkdir -p /usr/local/bin
-    sudo mv ./piper_wrapper /usr/local/bin/piper
-    sudo chmod +x /usr/local/bin/piper
+    # Professional Linux Path
+    INSTALL_DIR="/usr/local/bin"
+    sudo mkdir -p "$INSTALL_DIR"
+    sudo mv ./piper_wrapper "$INSTALL_DIR/piper"
+    sudo chmod +x "$INSTALL_DIR/piper"
 else
-    # MINGW64 / Windows Fallback
-    mkdir -p /usr/local/bin
-    mv ./piper_wrapper /usr/local/bin/piper
-    chmod +x /usr/local/bin/piper
+    # Windows/MINGW64 Path (User-level, no admin/sudo needed)
+    INSTALL_DIR="$HOME/bin"
+    mkdir -p "$INSTALL_DIR"
+    mv ./piper_wrapper "$INSTALL_DIR/piper"
+    chmod +x "$INSTALL_DIR/piper"
+    
+    # Add to current session path so Step 5 can find it immediately
+    export PATH="\$PATH:\$INSTALL_DIR"
 fi
-echo "✅ Global 'piper' command installed."
+
+echo "✅ Global 'piper' command installed in $INSTALL_DIR."
 
 # 5. The Internal Handshake: Run init
 echo "⚙️  Running Internal Core Initialization..."
-# Calling via full path to ensure it runs even if PATH hasn't refreshed locally
-/usr/local/bin/piper init
+# Attempt to run via the command name directly
+piper init
 
 # 6. Final Launch
 if [ -f docker-compose.yml ]; then
