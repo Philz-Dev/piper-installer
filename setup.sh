@@ -52,6 +52,7 @@ if [ -x "$(command -v sudo)" ]; then
     sudo mv /tmp/piper /usr/local/bin/piper
     sudo chmod +x /usr/local/bin/piper
 else
+    mkdir -p /usr/local/bin
     mv /tmp/piper /usr/local/bin/piper
     chmod +x /usr/local/bin/piper
 fi
