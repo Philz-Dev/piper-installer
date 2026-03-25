@@ -19,9 +19,14 @@ fi
 # 2. Dependency Check: Install Docker if missing
 if ! [ -x "$(command -v docker)" ]; then
     echo "📦 Docker not found. Installing now..."
-    curl -fsSL https://get.docker.com -o get-docker.sh
-    sudo sh get-docker.sh
-    sudo usermod -aG docker $USER
+    if [ -x "$(command -v sudo)" ]; then
+        curl -fsSL https://get.docker.com -o get-docker.sh
+        sudo sh get-docker.sh
+        sudo usermod -aG docker $USER
+    else
+        echo "❌ Automatic Docker install requires sudo. Please install Docker manually."
+        exit 1
+    fi
     echo "✅ Docker installed."
 else
     echo "✅ Docker is already installed."
@@ -42,14 +47,20 @@ docker run --rm -it \
   ghcr.io/philz-dev/piper-engine:v1 "\$@"
 EOF
 
-sudo mv /tmp/piper /usr/local/bin/piper
-sudo chmod +x /usr/local/bin/piper
+# Use sudo if available (Linux), otherwise move directly (MINGW64/Windows)
+if [ -x "$(command -v sudo)" ]; then
+    sudo mv /tmp/piper /usr/local/bin/piper
+    sudo chmod +x /usr/local/bin/piper
+else
+    mv /tmp/piper /usr/local/bin/piper
+    chmod +x /usr/local/bin/piper
+fi
 echo "✅ Global 'piper' command installed."
 
 # 5. The Internal Handshake: Run init
 echo "⚙️  Running Internal Core Initialization..."
-# Note: We call 'init' directly because the Dockerfile ENTRYPOINT handles the python script
-piper init
+# Calling via full path to ensure it runs even if PATH hasn't refreshed
+/usr/local/bin/piper init
 
 # 6. Final Launch
 if [ -f docker-compose.yml ]; then
