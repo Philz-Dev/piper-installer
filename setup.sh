@@ -1,5 +1,6 @@
 #!/bin/bash
 # 🚀 Piper Engine Bootstrap: The Automated Agency Setup
+# Location: https://github.com/Philz-Dev/piper-installer/main/setup.sh
 
 set -e # Exit immediately if a command fails
 
@@ -30,19 +31,37 @@ fi
 echo "🚚 Pulling the latest Piper Engine image..."
 docker pull ghcr.io/philz-dev/piper-engine:v1
 
-# 4. The Internal Handshake: Run piper init
-echo "⚙️  Running Internal Core Initialization..."
-# This triggers your Python 'init' function to set up DB tables silently
-docker run --rm --env-file .env ghcr.io/philz-dev/piper-engine:v1 piper init
+# 4. Create the Global CLI Wrapper (The "Magic" Link)
+echo "🛠️  Installing 'piper' command globally..."
+cat <<EOF > /tmp/piper
+#!/bin/bash
+# Wrapper for Piper Engine Docker Container
+docker run --rm -it \
+  -v \$(pwd):/app \
+  --env-file .env \
+  ghcr.io/philz-dev/piper-engine:v1 "\$@"
+EOF
 
-# 5. Final Launch
+sudo mv /tmp/piper /usr/local/bin/piper
+sudo chmod +x /usr/local/bin/piper
+echo "✅ Global 'piper' command installed."
+
+# 5. The Internal Handshake: Run init
+echo "⚙️  Running Internal Core Initialization..."
+# Note: We call 'init' directly because the Dockerfile ENTRYPOINT handles the python script
+piper init
+
+# 6. Final Launch
 if [ -f docker-compose.yml ]; then
     echo "🚀 Launching services with Docker Compose..."
     docker-compose up -d
     echo "------------------------------------------------"
     echo "  SUCCESS: Piper Engine is now running!         "
+    echo "  You can now use the global command: piper     "
     echo "------------------------------------------------"
 else
-    echo "⚠️  Setup finished, but no docker-compose.yml found."
-    echo "You can now run your engine using: docker run ..."
+    echo "------------------------------------------------"
+    echo "✅ Setup finished! 'piper' command is ready.    "
+    echo "Try typing: piper --help                        "
+    echo "------------------------------------------------"
 fi
