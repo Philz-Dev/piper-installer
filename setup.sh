@@ -39,7 +39,6 @@ docker pull ghcr.io/philz-dev/piper-engine:v1
 # 4. Create the Global CLI Wrapper (The "Magic" Link)
 echo "🛠️  Installing 'piper' command globally..."
 
-# Create the wrapper locally first to avoid /tmp permission issues
 cat <<EOF > ./piper_wrapper
 #!/bin/bash
 # Wrapper for Piper Engine Docker Container
@@ -49,30 +48,47 @@ docker run --rm -it \
   ghcr.io/philz-dev/piper-engine:v1 "\$@"
 EOF
 
-# Determine the best installation path based on environment
-if [ -x "$(command -v sudo)" ]; then
-    # Professional Linux Path
+# Determine the best installation path based on environment permissions
+# We check if we can write to /usr/local/bin OR if we can create it
+if [ -w "/usr/local/bin" ] || ([ -x "$(command -v sudo)" ] && sudo mkdir -p /usr/local/bin 2>/dev/null); then
+    # Professional Linux Path (or Admin Windows)
     INSTALL_DIR="/usr/local/bin"
-    sudo mkdir -p "$INSTALL_DIR"
-    sudo mv ./piper_wrapper "$INSTALL_DIR/piper"
-    sudo chmod +x "$INSTALL_DIR/piper"
+    echo "Using system path: $INSTALL_DIR"
+    
+    # Use sudo only if available
+    CMD_PREFIX=""
+    if [ -x "$(command -v sudo)" ]; then CMD_PREFIX="sudo "; fi
+    
+    $CMD_PREFIX mv ./piper_wrapper "$INSTALL_DIR/piper"
+    $CMD_PREFIX chmod +x "$INSTALL_DIR/piper"
 else
-    # Windows/MINGW64 Path (User-level, no admin/sudo needed)
-    INSTALL_DIR="$HOME/bin"
+    # Windows/MINGW64 Fallback (User-level folder to avoid Permission Denied)
+    INSTALL_DIR="$HOME/piper_bin"
+    echo "Permission denied for system path. Using user path: $INSTALL_DIR"
+    
     mkdir -p "$INSTALL_DIR"
     mv ./piper_wrapper "$INSTALL_DIR/piper"
     chmod +x "$INSTALL_DIR/piper"
     
-    # Add to current session path so Step 5 can find it immediately
-    export PATH="\$PATH:\$INSTALL_DIR"
+    # Add to current session path so Step 5 (piper init) works immediately
+    export PATH="$PATH:$INSTALL_DIR"
+    
+    # Permanently add to Bash profile if not already there
+    if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
+        echo "export PATH=\"\$PATH:$INSTALL_DIR\"" >> ~/.bash_profile || echo "export PATH=\"\$PATH:$INSTALL_DIR\"" >> ~/.bashrc
+    fi
 fi
 
 echo "✅ Global 'piper' command installed in $INSTALL_DIR."
 
 # 5. The Internal Handshake: Run init
 echo "⚙️  Running Internal Core Initialization..."
-# Attempt to run via the command name directly
-piper init
+# Try running via the command name directly; fallback to full path if needed
+if command -v piper >/dev/null 2>&1; then
+    piper init
+else
+    "$INSTALL_DIR/piper" init
+fi
 
 # 6. Final Launch
 if [ -f docker-compose.yml ]; then
