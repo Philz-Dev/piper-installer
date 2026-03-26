@@ -34,7 +34,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - piper_db_data:/var/lib/postgresql/data
+      - ./piper_db_data:/var/lib/postgresql/data
     networks:
       - piper-global-network
 
