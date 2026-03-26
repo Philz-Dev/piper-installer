@@ -1,6 +1,7 @@
 #!/bin/bash
 # 🚀 Piper Engine Bootstrap: The Automated Agency Setup
 # Architecture: Forced Managed Infrastructure (Database-as-Code)
+# Fix: Windows File System Sync & Path Verification
 
 set -e # Exit immediately if a command fails
 
@@ -112,13 +113,29 @@ echo "✅ Global 'piper' command installed in $INSTALL_DIR."
 
 # 5. The Internal Handshake: Run init
 echo "⚙️  Starting Core Database..."
-docker-compose -f docker-compose.db.yml up -d
+
+# Force a context check to ensure files are visible to Docker
+CURRENT_DIR=$(pwd)
+
+if [ ! -f "$CURRENT_DIR/docker-compose.db.yml" ]; then
+    echo "⚠️  File sync delay detected. Waiting for disk..."
+    sleep 2
+fi
+
+# Launch with explicit pathing to avoid "file not found" on Windows
+docker-compose -f "$CURRENT_DIR/docker-compose.db.yml" up -d
 
 echo "⏳ Waiting for Database to accept connections..."
-# Professional Health Check loop: prevents init from failing if Postgres is slow to boot
+RETRIES=0
+# Professional Health Check loop
 until docker exec $(docker ps -q -f name=db) pg_isready -U piper_admin >/dev/null 2>&1; do
   echo -n "."
   sleep 1
+  ((RETRIES++))
+  if [ $RETRIES -gt 30 ]; then
+    echo -e "\n❌ Database failed to start in time. Check 'docker ps' for issues."
+    exit 1
+  fi
 done
 
 echo -e "\n✅ Database Ready! Running Core Initialization..."
