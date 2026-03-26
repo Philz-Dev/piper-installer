@@ -1,6 +1,6 @@
 #!/bin/bash
 # 🚀 Piper Engine Bootstrap: The Automated Agency Setup
-# Fix: Network Label Conflict & RAM-to-Stdin streaming
+# Final Polish: Robust Health Check & Error Handling
 
 set -e 
 
@@ -11,7 +11,6 @@ echo "------------------------------------------------"
 # 1. ⚡ MANDATORY DATABASE INITIALIZATION ⚡
 DB_PASSWORD=$(openssl rand -hex 12 2>/dev/null || echo "piper_$(date +%s)")
 
-# CRITICAL FIX: Added 'external: true' to the network section
 COMPOSE_CONFIG=$(cat <<EOF
 services:
   db:
@@ -64,7 +63,6 @@ if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
     DOCKER_BIN="winpty docker"
 fi
 
-# Create network manually first
 docker network create piper-global-network 2>/dev/null || true
 
 cat <<EOF > ./piper_wrapper
@@ -76,7 +74,6 @@ $DOCKER_BIN run --rm -it \\
   ghcr.io/philz-dev/piper-engine:v1 "\$@"
 EOF
 
-# Install to Path
 if [ -w "/usr/local/bin" ] || ([ -x "$(command -v sudo)" ] && sudo mkdir -p /usr/local/bin 2>/dev/null); then
     INSTALL_DIR="/usr/local/bin"
     CMD_PREFIX=""
@@ -98,26 +95,30 @@ fi
 
 echo "✅ Global 'piper' command installed in $INSTALL_DIR."
 
-# 5. The Internal Handshake: Run init
+# 5. The Internal Handshake
 echo "⚙️  Starting Core Database..."
 
-# Cleanup old attempts
+# Clean up existing state to prevent conflicts
 docker rm -f piper-db 2>/dev/null || true
 
-# Stream the config
+# Start via stdin
 echo "$COMPOSE_CONFIG" | docker-compose -f - up -d
 
 echo "⏳ Waiting for Database to accept connections..."
 RETRIES=0
-until [ "$(docker ps -q -f name=piper-db)" ] && docker exec piper-db pg_isready -U piper_admin >/dev/null 2>&1; do
+# Simplified check: just try to run pg_isready inside the container
+# We temporarily disable 'set -e' so the loop doesn't crash the script on first fail
+set +e
+until docker exec piper-db pg_isready -U piper_admin >/dev/null 2>&1; do
   echo -n "."
   sleep 1
   ((RETRIES++))
   if [ $RETRIES -gt 30 ]; then
-    echo -e "\n❌ Database timeout."
+    echo -e "\n❌ Database timeout. Try: docker logs piper-db"
     exit 1
   fi
 done
+set -e
 
 echo -e "\n✅ Database Ready! Running Core Initialization..."
 "$INSTALL_DIR/piper" init
