@@ -1,6 +1,6 @@
 #!/bin/bash
 # 🚀 Piper Engine Bootstrap: The Automated Agency Setup
-# Updated: Windows TTY (winpty) Support & Local DB Auto-Provisioning
+# Architecture: Forced Managed Infrastructure (Database-as-Code)
 
 set -e # Exit immediately if a command fails
 
@@ -8,26 +8,23 @@ echo "------------------------------------------------"
 echo "   PIPER ENGINE: System Initialization Starting  "
 echo "------------------------------------------------"
 
-# 1. Environment Check: Database Configuration
+# 1. ⚡ MANDATORY DATABASE INITIALIZATION ⚡
 if [ ! -f .env ]; then
-    echo "📌 Database Configuration"
-    echo "1) Use my own existing PostgreSQL (Enter URL)"
-    echo "2) Create a new local Database automatically (Recommended)"
-    read -p "Select an option [2]: " db_choice
-    db_choice=${db_choice:-2}
-
-    if [ "$db_choice" == "1" ]; then
-        read -p "Enter your PostgreSQL URL (e.g., postgresql://user:pass@localhost:5432/db): " db_url
-        echo "DATABASE_URL=$db_url" > .env
-    else
-        DB_PASSWORD=$(openssl rand -hex 12 2>/dev/null || echo "piper_pass_$(date +%s)")
-        echo "DATABASE_URL=postgresql://piper_admin:$DB_PASSWORD@db:5432/piper_data" > .env
-        
-        cat <<EOF > docker-compose.db.yml
+    echo "📌 Initializing Piper Master Database..."
+    
+    # Generate a unique, secure password automatically
+    DB_PASSWORD=$(openssl rand -hex 12 2>/dev/null || echo "piper_$(date +%s)")
+    
+    # Internal URL: 'db' is the hostname inside the Docker network
+    echo "DATABASE_URL=postgresql://piper_admin:$DB_PASSWORD@db:5432/piper_data" > .env
+    
+    # Create the dedicated Database Orchestrator
+    cat <<EOF > docker-compose.db.yml
 version: '3.8'
 services:
   db:
-    image: postgres:15
+    image: postgres:15-alpine
+    restart: always
     environment:
       - POSTGRES_USER=piper_admin
       - POSTGRES_PASSWORD=$DB_PASSWORD
@@ -35,20 +32,18 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - piper_db_data:/var/lib/postgresql/data
+      - ./piper_db_data:/var/lib/postgresql/data
     networks:
       - piper-global-network
 
 networks:
   piper-global-network:
-    external: true
+    name: piper-global-network
 
 volumes:
   piper_db_data:
 EOF
-        echo "✅ Local Database configuration generated."
-        AUTO_DB=true
-    fi
+    echo "✅ Master Database configured and secured."
 fi
 
 # 2. Dependency Check: Install Docker if missing
@@ -105,7 +100,7 @@ else
     mv ./piper_wrapper "$INSTALL_DIR/piper"
     chmod +x "$INSTALL_DIR/piper"
     export PATH="$PATH:$INSTALL_DIR"
-    # Update profile to persist the path
+    
     SHELL_PROFILE="$HOME/.bashrc"
     [ -f "$HOME/.bash_profile" ] && SHELL_PROFILE="$HOME/.bash_profile"
     if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
@@ -116,26 +111,25 @@ fi
 echo "✅ Global 'piper' command installed in $INSTALL_DIR."
 
 # 5. The Internal Handshake: Run init
-echo "⚙️  Running Internal Core Initialization..."
-if [ "$AUTO_DB" = true ]; then
-    echo "⏳ Waiting for Database container to wake up..."
-    docker-compose -f docker-compose.db.yml up -d
-    sleep 5 
-fi
+echo "⚙️  Starting Core Database..."
+docker-compose -f docker-compose.db.yml up -d
 
-# Using absolute path to bypass any PATH refresh issues in current session
+echo "⏳ Waiting for Database to accept connections..."
+# Professional Health Check loop: prevents init from failing if Postgres is slow to boot
+until docker exec $(docker ps -q -f name=db) pg_isready -U piper_admin >/dev/null 2>&1; do
+  echo -n "."
+  sleep 1
+done
+
+echo -e "\n✅ Database Ready! Running Core Initialization..."
 "$INSTALL_DIR/piper" init
 
 # 6. Final Launch
 echo "------------------------------------------------"
 echo "✅ SUCCESS: Piper Engine Setup Complete!"
 echo "------------------------------------------------"
-if [ "$AUTO_DB" = true ]; then
-    echo "📍 LOCAL DB ACCESS (for TablePlus/DBeaver):"
-    echo "   Host: localhost"
-    echo "   Port: 5432"
-    echo "   User: piper_admin"
-    echo "   Pass: $DB_PASSWORD"
-    echo "------------------------------------------------"
-fi
+echo "📍 DATABASE CREDENTIALS (Saved in .env):"
+echo "   User: piper_admin"
+echo "   Pass: $DB_PASSWORD"
+echo "------------------------------------------------"
 echo "Try typing: piper --help"
