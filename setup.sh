@@ -1,6 +1,6 @@
 #!/bin/bash
 # 🚀 Piper Engine Bootstrap: The Automated Agency Setup
-# Updated: Local Database Auto-Provisioning
+# Updated: Windows TTY (winpty) Support & Local DB Auto-Provisioning
 
 set -e # Exit immediately if a command fails
 
@@ -20,13 +20,9 @@ if [ ! -f .env ]; then
         read -p "Enter your PostgreSQL URL (e.g., postgresql://user:pass@localhost:5432/db): " db_url
         echo "DATABASE_URL=$db_url" > .env
     else
-        # Generate a random 12-character hex password for security
         DB_PASSWORD=$(openssl rand -hex 12 2>/dev/null || echo "piper_pass_$(date +%s)")
-        
-        # We use @db:5432 because the CLI wrapper will be inside the docker network
         echo "DATABASE_URL=postgresql://piper_admin:$DB_PASSWORD@db:5432/piper_data" > .env
         
-        # Create the local docker-compose for the DB
         cat <<EOF > docker-compose.db.yml
 version: '3.8'
 services:
@@ -75,15 +71,22 @@ fi
 echo "🚚 Pulling the latest Piper Engine image..."
 docker pull ghcr.io/philz-dev/piper-engine:v1
 
-# 4. Create the Global CLI Wrapper
+# 4. Create the Global CLI Wrapper (with Windows TTY Fix)
 echo "🛠️  Installing 'piper' command globally..."
+
+# Detect if we are on Windows MINGW/MSYS to apply winpty
+DOCKER_BIN="docker"
+if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
+    DOCKER_BIN="winpty docker"
+fi
 
 # We ensure the network exists before running the wrapper
 docker network create piper-global-network 2>/dev/null || true
 
 cat <<EOF > ./piper_wrapper
 #!/bin/bash
-docker run --rm -it \\
+# Piper CLI Wrapper
+$DOCKER_BIN run --rm -it \\
   -v "/\$(pwd):/app" \\
   --network piper-global-network \\
   --env-file .env \\
@@ -102,19 +105,25 @@ else
     mv ./piper_wrapper "$INSTALL_DIR/piper"
     chmod +x "$INSTALL_DIR/piper"
     export PATH="$PATH:$INSTALL_DIR"
+    # Update profile to persist the path
+    SHELL_PROFILE="$HOME/.bashrc"
+    [ -f "$HOME/.bash_profile" ] && SHELL_PROFILE="$HOME/.bash_profile"
     if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
-        echo "export PATH=\"\$PATH:$INSTALL_DIR\"" >> ~/.bashrc
+        echo "export PATH=\"\$PATH:$INSTALL_DIR\"" >> "$SHELL_PROFILE"
     fi
 fi
+
+echo "✅ Global 'piper' command installed in $INSTALL_DIR."
 
 # 5. The Internal Handshake: Run init
 echo "⚙️  Running Internal Core Initialization..."
 if [ "$AUTO_DB" = true ]; then
     echo "⏳ Waiting for Database container to wake up..."
     docker-compose -f docker-compose.db.yml up -d
-    sleep 5 # Give Postgres a moment to start
+    sleep 5 
 fi
 
+# Using absolute path to bypass any PATH refresh issues in current session
 "$INSTALL_DIR/piper" init
 
 # 6. Final Launch
