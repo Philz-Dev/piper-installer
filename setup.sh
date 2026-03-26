@@ -1,7 +1,7 @@
 #!/bin/bash
 # 🚀 Piper Engine Bootstrap: The Automated Agency Setup
 # Architecture: Forced Managed Infrastructure (Database-as-Code)
-# Fix: Windows File System Sync & Path Verification
+# Fix: Bypass Windows File System Sync using stdin stream
 
 set -e # Exit immediately if a command fails
 
@@ -25,6 +25,7 @@ version: '3.8'
 services:
   db:
     image: postgres:15-alpine
+    container_name: piper-db
     restart: always
     environment:
       - POSTGRES_USER=piper_admin
@@ -33,7 +34,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - ./piper_db_data:/var/lib/postgresql/data
+      - piper_db_data:/var/lib/postgresql/data
     networks:
       - piper-global-network
 
@@ -70,13 +71,11 @@ docker pull ghcr.io/philz-dev/piper-engine:v1
 # 4. Create the Global CLI Wrapper (with Windows TTY Fix)
 echo "🛠️  Installing 'piper' command globally..."
 
-# Detect if we are on Windows MINGW/MSYS to apply winpty
 DOCKER_BIN="docker"
 if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
     DOCKER_BIN="winpty docker"
 fi
 
-# We ensure the network exists before running the wrapper
 docker network create piper-global-network 2>/dev/null || true
 
 cat <<EOF > ./piper_wrapper
@@ -114,26 +113,19 @@ echo "✅ Global 'piper' command installed in $INSTALL_DIR."
 # 5. The Internal Handshake: Run init
 echo "⚙️  Starting Core Database..."
 
-# Force a context check to ensure files are visible to Docker
-CURRENT_DIR=$(pwd)
-
-if [ ! -f "$CURRENT_DIR/docker-compose.db.yml" ]; then
-    echo "⚠️  File sync delay detected. Waiting for disk..."
-    sleep 2
-fi
-
-# Launch with explicit pathing to avoid "file not found" on Windows
-docker-compose -f "$CURRENT_DIR/docker-compose.db.yml" up -d
+# FIX: Pipe the file content directly to docker-compose via stdin (-f -)
+# This bypasses Windows/WSL2 file system mounting lags.
+cat docker-compose.db.yml | docker-compose -f - up -d
 
 echo "⏳ Waiting for Database to accept connections..."
 RETRIES=0
-# Professional Health Check loop
-until docker exec $(docker ps -q -f name=db) pg_isready -U piper_admin >/dev/null 2>&1; do
+# We use the container_name 'piper-db' defined in the YAML for precision
+until [ "$(docker ps -q -f name=piper-db)" ] && docker exec piper-db pg_isready -U piper_admin >/dev/null 2>&1; do
   echo -n "."
   sleep 1
   ((RETRIES++))
   if [ $RETRIES -gt 30 ]; then
-    echo -e "\n❌ Database failed to start in time. Check 'docker ps' for issues."
+    echo -e "\n❌ Database failed to start. Run 'docker logs piper-db' to troubleshoot."
     exit 1
   fi
 done
