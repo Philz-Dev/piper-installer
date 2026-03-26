@@ -1,19 +1,58 @@
 #!/bin/bash
 # 🚀 Piper Engine Bootstrap: The Automated Agency Setup
-# Location: https://github.com/Philz-Dev/piper-installer/main/setup.sh
+# Updated: Local Database Auto-Provisioning
 
 set -e # Exit immediately if a command fails
 
 echo "------------------------------------------------"
-echo "  PIPER ENGINE: System Initialization Starting  "
+echo "   PIPER ENGINE: System Initialization Starting  "
 echo "------------------------------------------------"
 
-# 1. Environment Check: Create .env if it doesn't exist
+# 1. Environment Check: Database Configuration
 if [ ! -f .env ]; then
-    echo "📌 No .env file found. Let's configure your database."
-    read -p "Enter your PostgreSQL URL (e.g., postgresql://user:pass@localhost:5432/db): " db_url
-    echo "DATABASE_URL=$db_url" > .env
-    echo "✅ .env created successfully."
+    echo "📌 Database Configuration"
+    echo "1) Use my own existing PostgreSQL (Enter URL)"
+    echo "2) Create a new local Database automatically (Recommended)"
+    read -p "Select an option [2]: " db_choice
+    db_choice=${db_choice:-2}
+
+    if [ "$db_choice" == "1" ]; then
+        read -p "Enter your PostgreSQL URL (e.g., postgresql://user:pass@localhost:5432/db): " db_url
+        echo "DATABASE_URL=$db_url" > .env
+    else
+        # Generate a random 12-character hex password for security
+        DB_PASSWORD=$(openssl rand -hex 12 2>/dev/null || echo "piper_pass_$(date +%s)")
+        
+        # We use @db:5432 because the CLI wrapper will be inside the docker network
+        echo "DATABASE_URL=postgresql://piper_admin:$DB_PASSWORD@db:5432/piper_data" > .env
+        
+        # Create the local docker-compose for the DB
+        cat <<EOF > docker-compose.db.yml
+version: '3.8'
+services:
+  db:
+    image: postgres:15
+    environment:
+      - POSTGRES_USER=piper_admin
+      - POSTGRES_PASSWORD=$DB_PASSWORD
+      - POSTGRES_DB=piper_data
+    ports:
+      - "5432:5432"
+    volumes:
+      - piper_db_data:/var/lib/postgresql/data
+    networks:
+      - piper-global-network
+
+networks:
+  piper-global-network:
+    external: true
+
+volumes:
+  piper_db_data:
+EOF
+        echo "✅ Local Database configuration generated."
+        AUTO_DB=true
+    fi
 fi
 
 # 2. Dependency Check: Install Docker if missing
@@ -36,71 +75,58 @@ fi
 echo "🚚 Pulling the latest Piper Engine image..."
 docker pull ghcr.io/philz-dev/piper-engine:v1
 
-# 4. Create the Global CLI Wrapper (The "Magic" Link)
+# 4. Create the Global CLI Wrapper
 echo "🛠️  Installing 'piper' command globally..."
+
+# We ensure the network exists before running the wrapper
+docker network create piper-global-network 2>/dev/null || true
 
 cat <<EOF > ./piper_wrapper
 #!/bin/bash
-# Wrapper for Piper Engine Docker Container
-docker run --rm -it \
-  -v \$(pwd):/app \
-  --env-file .env \
+docker run --rm -it \\
+  -v "/\$(pwd):/app" \\
+  --network piper-global-network \\
+  --env-file .env \\
   ghcr.io/philz-dev/piper-engine:v1 "\$@"
 EOF
 
-# Determine the best installation path based on environment permissions
-# We check if we can write to /usr/local/bin OR if we can create it
 if [ -w "/usr/local/bin" ] || ([ -x "$(command -v sudo)" ] && sudo mkdir -p /usr/local/bin 2>/dev/null); then
-    # Professional Linux Path (or Admin Windows)
     INSTALL_DIR="/usr/local/bin"
-    echo "Using system path: $INSTALL_DIR"
-    
-    # Use sudo only if available
     CMD_PREFIX=""
     if [ -x "$(command -v sudo)" ]; then CMD_PREFIX="sudo "; fi
-    
     $CMD_PREFIX mv ./piper_wrapper "$INSTALL_DIR/piper"
     $CMD_PREFIX chmod +x "$INSTALL_DIR/piper"
 else
-    # Windows/MINGW64 Fallback (User-level folder to avoid Permission Denied)
     INSTALL_DIR="$HOME/piper_bin"
-    echo "Permission denied for system path. Using user path: $INSTALL_DIR"
-    
     mkdir -p "$INSTALL_DIR"
     mv ./piper_wrapper "$INSTALL_DIR/piper"
     chmod +x "$INSTALL_DIR/piper"
-    
-    # Add to current session path so Step 5 (piper init) works immediately
     export PATH="$PATH:$INSTALL_DIR"
-    
-    # Permanently add to Bash profile if not already there
     if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
-        echo "export PATH=\"\$PATH:$INSTALL_DIR\"" >> ~/.bash_profile || echo "export PATH=\"\$PATH:$INSTALL_DIR\"" >> ~/.bashrc
+        echo "export PATH=\"\$PATH:$INSTALL_DIR\"" >> ~/.bashrc
     fi
 fi
 
-echo "✅ Global 'piper' command installed in $INSTALL_DIR."
-
 # 5. The Internal Handshake: Run init
 echo "⚙️  Running Internal Core Initialization..."
-# Try running via the command name directly; fallback to full path if needed
-if command -v piper >/dev/null 2>&1; then
-    piper init
-else
-    "$INSTALL_DIR/piper" init
+if [ "$AUTO_DB" = true ]; then
+    echo "⏳ Waiting for Database container to wake up..."
+    docker-compose -f docker-compose.db.yml up -d
+    sleep 5 # Give Postgres a moment to start
 fi
 
+"$INSTALL_DIR/piper" init
+
 # 6. Final Launch
-if [ -f docker-compose.yml ]; then
-    echo "🚀 Launching services with Docker Compose..."
-    docker-compose up -d
-    echo "------------------------------------------------"
-    echo "  SUCCESS: Piper Engine is now running!         "
-    echo "  You can now use the global command: piper     "
-    echo "------------------------------------------------"
-else
-    echo "------------------------------------------------"
-    echo "✅ Setup finished! 'piper' command is ready.    "
-    echo "Try typing: piper --help                        "
+echo "------------------------------------------------"
+echo "✅ SUCCESS: Piper Engine Setup Complete!"
+echo "------------------------------------------------"
+if [ "$AUTO_DB" = true ]; then
+    echo "📍 LOCAL DB ACCESS (for TablePlus/DBeaver):"
+    echo "   Host: localhost"
+    echo "   Port: 5432"
+    echo "   User: piper_admin"
+    echo "   Pass: $DB_PASSWORD"
     echo "------------------------------------------------"
 fi
+echo "Try typing: piper --help"
