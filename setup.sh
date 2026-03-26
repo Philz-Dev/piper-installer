@@ -1,6 +1,6 @@
 #!/bin/bash
 # 🚀 Piper Engine Bootstrap: The Automated Agency Setup
-# Final Polish: Robust Health Check, RAM Config, & Credential Locking
+# Architecture: Zero-Footprint Config (RAM-only Orchestration)
 
 set -e 
 
@@ -8,19 +8,17 @@ echo "------------------------------------------------"
 echo "   PIPER ENGINE: System Initialization Starting  "
 echo "------------------------------------------------"
 
-# 1. ⚡ MANDATORY DATABASE INITIALIZATION ⚡
+# 1. ⚡ MANDATORY DATABASE INITIALIZATION (RAM ONLY) ⚡
 if [ -f .env ]; then
-    echo "📌 Existing .env found. Loading credentials..."
-    # Extract existing password to ensure RAM config matches Disk data
+    echo "📌 Existing credentials found in .env."
     DB_PASSWORD=$(grep DATABASE_URL .env | sed 's/.*:\(.*\)@.*/\1/')
 else
     echo "📌 Initializing Piper Master Database..."
-    # Generate new password ONLY if .env doesn't exist
     DB_PASSWORD=$(openssl rand -hex 12 2>/dev/null || echo "piper_$(date +%s)")
     echo "DATABASE_URL=postgresql://piper_admin:$DB_PASSWORD@db:5432/piper_data" > .env
 fi
 
-# Define the config using the password we just loaded/created
+# We define the YAML in RAM. We do NOT echo this to a file.
 COMPOSE_CONFIG=$(cat <<EOF
 services:
   db:
@@ -41,19 +39,12 @@ services:
 networks:
   piper-global-network:
     external: true
-
-volumes:
-  piper_db_data:
 EOF
 )
 
-# Sync the file for user visibility
-echo "$COMPOSE_CONFIG" > docker-compose.db.yml
-echo "✅ Master Database configuration synced."
-
 # 2. Dependency Check
 if ! [ -x "$(command -v docker)" ]; then
-    echo "❌ Docker not found. Please install Docker and try again."
+    echo "❌ Docker not found."
     exit 1
 fi
 
@@ -72,7 +63,6 @@ docker network create piper-global-network 2>/dev/null || true
 
 cat <<EOF > ./piper_wrapper
 #!/bin/bash
-# Piper CLI Wrapper
 $DOCKER_BIN run --rm -it \\
   -v "/\$(pwd):/app" \\
   --network piper-global-network \\
@@ -80,6 +70,7 @@ $DOCKER_BIN run --rm -it \\
   ghcr.io/philz-dev/piper-engine:v1 "\$@"
 EOF
 
+# Installation logic
 if [ -w "/usr/local/bin" ] || ([ -x "$(command -v sudo)" ] && sudo mkdir -p /usr/local/bin 2>/dev/null); then
     INSTALL_DIR="/usr/local/bin"
     CMD_PREFIX=""
@@ -99,26 +90,24 @@ else
     fi
 fi
 
-echo "✅ Global 'piper' command installed in $INSTALL_DIR."
-
 # 5. The Internal Handshake
 echo "⚙️  Starting Core Database..."
 
-# Clean up existing state to prevent port/name conflicts
+# Cleanup old container if it exists
 docker rm -f piper-db 2>/dev/null || true
 
-# Start via stdin to bypass Windows file sync lag
+# CRITICAL: Launching directly from the variable via stdin (-)
 echo "$COMPOSE_CONFIG" | docker-compose -f - up -d
 
 echo "⏳ Waiting for Database to accept connections..."
 RETRIES=0
-set +e # Disable exit-on-error for the loop
+set +e
 until docker exec piper-db pg_isready -U piper_admin >/dev/null 2>&1; do
   echo -n "."
   sleep 1
   ((RETRIES++))
   if [ $RETRIES -gt 30 ]; then
-    echo -e "\n❌ Database timeout. Run 'docker logs piper-db' to troubleshoot."
+    echo -e "\n❌ Database timeout."
     exit 1
   fi
 done
@@ -127,8 +116,11 @@ set -e
 echo -e "\n✅ Database Ready! Running Core Initialization..."
 "$INSTALL_DIR/piper" init
 
-# 6. Final Launch
+# 6. Final Launch & Clean Up
 echo "------------------------------------------------"
 echo "✅ SUCCESS: Piper Engine Setup Complete!"
 echo "------------------------------------------------"
 echo "Try typing: piper --help"
+
+# Optional: Self-destruct the setup script for a clean folder
+# rm -- "$0"
