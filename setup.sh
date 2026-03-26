@@ -1,6 +1,6 @@
 #!/bin/bash
 # 🚀 Piper Engine Bootstrap: The Automated Agency Setup
-# Final Polish: Robust Health Check & Error Handling
+# Final Polish: Robust Health Check, RAM Config, & Credential Locking
 
 set -e 
 
@@ -9,8 +9,18 @@ echo "   PIPER ENGINE: System Initialization Starting  "
 echo "------------------------------------------------"
 
 # 1. ⚡ MANDATORY DATABASE INITIALIZATION ⚡
-DB_PASSWORD=$(openssl rand -hex 12 2>/dev/null || echo "piper_$(date +%s)")
+if [ -f .env ]; then
+    echo "📌 Existing .env found. Loading credentials..."
+    # Extract existing password to ensure RAM config matches Disk data
+    DB_PASSWORD=$(grep DATABASE_URL .env | sed 's/.*:\(.*\)@.*/\1/')
+else
+    echo "📌 Initializing Piper Master Database..."
+    # Generate new password ONLY if .env doesn't exist
+    DB_PASSWORD=$(openssl rand -hex 12 2>/dev/null || echo "piper_$(date +%s)")
+    echo "DATABASE_URL=postgresql://piper_admin:$DB_PASSWORD@db:5432/piper_data" > .env
+fi
 
+# Define the config using the password we just loaded/created
 COMPOSE_CONFIG=$(cat <<EOF
 services:
   db:
@@ -37,18 +47,13 @@ volumes:
 EOF
 )
 
-if [ ! -f .env ]; then
-    echo "📌 Initializing Piper Master Database..."
-    echo "DATABASE_URL=postgresql://piper_admin:$DB_PASSWORD@db:5432/piper_data" > .env
-    echo "$COMPOSE_CONFIG" > docker-compose.db.yml
-    echo "✅ Master Database configured."
-else
-    DB_PASSWORD=$(grep DATABASE_URL .env | sed 's/.*:\(.*\)@.*/\1/')
-fi
+# Sync the file for user visibility
+echo "$COMPOSE_CONFIG" > docker-compose.db.yml
+echo "✅ Master Database configuration synced."
 
 # 2. Dependency Check
 if ! [ -x "$(command -v docker)" ]; then
-    echo "❌ Docker not found."
+    echo "❌ Docker not found. Please install Docker and try again."
     exit 1
 fi
 
@@ -67,6 +72,7 @@ docker network create piper-global-network 2>/dev/null || true
 
 cat <<EOF > ./piper_wrapper
 #!/bin/bash
+# Piper CLI Wrapper
 $DOCKER_BIN run --rm -it \\
   -v "/\$(pwd):/app" \\
   --network piper-global-network \\
@@ -98,23 +104,21 @@ echo "✅ Global 'piper' command installed in $INSTALL_DIR."
 # 5. The Internal Handshake
 echo "⚙️  Starting Core Database..."
 
-# Clean up existing state to prevent conflicts
+# Clean up existing state to prevent port/name conflicts
 docker rm -f piper-db 2>/dev/null || true
 
-# Start via stdin
+# Start via stdin to bypass Windows file sync lag
 echo "$COMPOSE_CONFIG" | docker-compose -f - up -d
 
 echo "⏳ Waiting for Database to accept connections..."
 RETRIES=0
-# Simplified check: just try to run pg_isready inside the container
-# We temporarily disable 'set -e' so the loop doesn't crash the script on first fail
-set +e
+set +e # Disable exit-on-error for the loop
 until docker exec piper-db pg_isready -U piper_admin >/dev/null 2>&1; do
   echo -n "."
   sleep 1
   ((RETRIES++))
   if [ $RETRIES -gt 30 ]; then
-    echo -e "\n❌ Database timeout. Try: docker logs piper-db"
+    echo -e "\n❌ Database timeout. Run 'docker logs piper-db' to troubleshoot."
     exit 1
   fi
 done
