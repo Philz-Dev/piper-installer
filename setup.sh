@@ -1,7 +1,7 @@
 #!/bin/bash
 # 🚀 Piper Engine Bootstrap: The Automated Agency Setup
 # Architecture: Forced Managed Infrastructure (Database-as-Code)
-# Fix: Bypass Windows File System Sync using stdin stream
+# Fix: RAM-to-Stdin streaming to bypass Windows File System Sync issues
 
 set -e # Exit immediately if a command fails
 
@@ -10,17 +10,10 @@ echo "   PIPER ENGINE: System Initialization Starting  "
 echo "------------------------------------------------"
 
 # 1. ⚡ MANDATORY DATABASE INITIALIZATION ⚡
-if [ ! -f .env ]; then
-    echo "📌 Initializing Piper Master Database..."
-    
-    # Generate a unique, secure password automatically
-    DB_PASSWORD=$(openssl rand -hex 12 2>/dev/null || echo "piper_$(date +%s)")
-    
-    # Internal URL: 'db' is the hostname inside the Docker network
-    echo "DATABASE_URL=postgresql://piper_admin:$DB_PASSWORD@db:5432/piper_data" > .env
-    
-    # Create the dedicated Database Orchestrator
-    cat <<EOF > docker-compose.db.yml
+# Define the config first so it's available in memory even if the file exists
+DB_PASSWORD=$(openssl rand -hex 12 2>/dev/null || echo "piper_$(date +%s)")
+
+COMPOSE_CONFIG=$(cat <<EOF
 version: '3.8'
 services:
   db:
@@ -45,7 +38,17 @@ networks:
 volumes:
   piper_db_data:
 EOF
+)
+
+if [ ! -f .env ]; then
+    echo "📌 Initializing Piper Master Database..."
+    echo "DATABASE_URL=postgresql://piper_admin:$DB_PASSWORD@db:5432/piper_data" > .env
+    # We still save the file for the user's future use
+    echo "$COMPOSE_CONFIG" > docker-compose.db.yml
     echo "✅ Master Database configured and secured."
+else
+    # If .env exists, we try to pull the existing password for the display at the end
+    DB_PASSWORD=$(grep DATABASE_URL .env | sed 's/.*:\(.*\)@.*/\1/')
 fi
 
 # 2. Dependency Check: Install Docker if missing
@@ -113,13 +116,12 @@ echo "✅ Global 'piper' command installed in $INSTALL_DIR."
 # 5. The Internal Handshake: Run init
 echo "⚙️  Starting Core Database..."
 
-# FIX: Pipe the file content directly to docker-compose via stdin (-f -)
-# This bypasses Windows/WSL2 file system mounting lags.
-cat docker-compose.db.yml | docker-compose -f - up -d
+# FIX: Stream the configuration directly from the Bash variable
+# This bypasses the Windows hard drive entirely during the startup process.
+echo "$COMPOSE_CONFIG" | docker-compose -f - up -d
 
 echo "⏳ Waiting for Database to accept connections..."
 RETRIES=0
-# We use the container_name 'piper-db' defined in the YAML for precision
 until [ "$(docker ps -q -f name=piper-db)" ] && docker exec piper-db pg_isready -U piper_admin >/dev/null 2>&1; do
   echo -n "."
   sleep 1
