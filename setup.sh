@@ -1,5 +1,5 @@
 #!/bin/bash
-# 🚀 Piper Engine Bootstrap: Universal Edition
+# 🚀 Piper Engine Bootstrap: High-Speed Provisioning
 set -e 
 
 echo "------------------------------------------------"
@@ -7,14 +7,14 @@ echo "   PIPER ENGINE: System Initialization Starting  "
 echo "------------------------------------------------"
 
 # 1. ⚡ CREDENTIALS ⚡
-# We use 'piper-db' as the hostname because that is the literal name of the container
+# We will force the .env to use 'db' to match the internal alias
 if [ -f .env ]; then
-    sed -i 's/@db:/@piper-db:/g' .env || true
+    sed -i 's/@piper-db:/@db:/g' .env || true
     DB_PASSWORD=$(grep DATABASE_URL .env | sed -e 's|.*//[^:]*:\([^@]*\)@.*|\1|')
 else
     echo "📌 Generating fresh credentials..."
     DB_PASSWORD=$(openssl rand -hex 12 2>/dev/null || echo "piper_$(date +%s)")
-    echo "DATABASE_URL=postgresql://piper_admin:$DB_PASSWORD@piper-db:5432/piper_data" > .env
+    echo "DATABASE_URL=postgresql://piper_admin:$DB_PASSWORD@db:5432/piper_data" > .env
 fi
 
 COMPOSE_CONFIG=$(cat <<EOF
@@ -32,10 +32,13 @@ services:
     volumes:
       - ./piper_db_data:/var/lib/postgresql/data
     networks:
-      - piper-network
+      piper-network:
+        # 🚀 THIS IS THE KEY: It gives the container the nickname "db"
+        aliases:
+          - db
 networks:
   piper-network:
-    driver: bridge
+    name: piper-network
 EOF
 )
 
@@ -45,18 +48,19 @@ docker network create piper-network 2>/dev/null || true
 # 3. Pulling Engine
 docker pull ghcr.io/philz-dev/piper-engine:v1
 
-# 4. Global Command Setup (The Universal Fix)
+# 4. Global Command Setup
 cat <<'EOF' > ./piper_wrapper
 #!/bin/bash
 USE_TTY="-it"
-# Windows TTY Check
+FINAL_BIN="docker"
+
 if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
     [ -t 0 ] && FINAL_BIN="winpty docker" || { FINAL_BIN="docker"; USE_TTY="-i"; }
 else
     FINAL_BIN="docker"
 fi
 
-# 🚀 THE FIX: Use the shared network and the EXACT container name
+# Run the container on the same network
 $FINAL_BIN run --rm $USE_TTY \
   -v "/$(pwd):/app" \
   --network piper-network \
@@ -85,7 +89,8 @@ done
 
 # 6. HANDSHAKE
 echo -e "\n🚀 Running Core Initialization..."
-piper init
+# Use the full path to ensure we use the wrapper we just made
+"$INSTALL_DIR/piper" init
 
 echo "------------------------------------------------"
 echo "✅ SUCCESS: Piper Engine Online"
