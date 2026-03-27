@@ -43,13 +43,12 @@ EOF
 # 2. 🧹 THE CLEANUP FIX
 echo "🧹 Cleaning up old networks and containers..."
 docker rm -f piper-db piper_db piper_core 2>/dev/null || true
-# This removes the problematic network so Compose can recreate it correctly
 docker network rm piper-network 2>/dev/null || true
 
 # 3. Pulling Engine
 docker pull ghcr.io/philz-dev/piper-engine:v1
 
-# 4. Global Command Setup
+# 4. Global Command Setup (The Socket Fix is here)
 cat <<'EOF' > ./piper_wrapper
 #!/bin/bash
 USE_TTY="-it"
@@ -60,8 +59,10 @@ else
     FINAL_BIN="docker"
 fi
 
+# 🚀 THE CRITICAL FIX: Added /var/run/docker.sock mount
 $FINAL_BIN run --rm $USE_TTY \
   -v "/$(pwd):/app" \
+  -v "/var/run/docker.sock:/var/run/docker.sock" \
   --network piper-network \
   --env-file .env \
   ghcr.io/philz-dev/piper-engine:v1 "$@"
