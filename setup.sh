@@ -7,7 +7,6 @@ echo "   PIPER ENGINE: System Initialization Starting  "
 echo "------------------------------------------------"
 
 # 1. ⚡ CREDENTIALS ⚡
-# We will force the .env to use 'db' to match the internal alias
 if [ -f .env ]; then
     sed -i 's/@piper-db:/@db:/g' .env || true
     DB_PASSWORD=$(grep DATABASE_URL .env | sed -e 's|.*//[^:]*:\([^@]*\)@.*|\1|')
@@ -33,7 +32,6 @@ services:
       - ./piper_db_data:/var/lib/postgresql/data
     networks:
       piper-network:
-        # 🚀 THIS IS THE KEY: It gives the container the nickname "db"
         aliases:
           - db
 networks:
@@ -42,8 +40,11 @@ networks:
 EOF
 )
 
-# 2. Network Prep
-docker network create piper-network 2>/dev/null || true
+# 2. 🧹 THE CLEANUP FIX
+echo "🧹 Cleaning up old networks and containers..."
+docker rm -f piper-db piper_db piper_core 2>/dev/null || true
+# This removes the problematic network so Compose can recreate it correctly
+docker network rm piper-network 2>/dev/null || true
 
 # 3. Pulling Engine
 docker pull ghcr.io/philz-dev/piper-engine:v1
@@ -53,14 +54,12 @@ cat <<'EOF' > ./piper_wrapper
 #!/bin/bash
 USE_TTY="-it"
 FINAL_BIN="docker"
-
 if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
     [ -t 0 ] && FINAL_BIN="winpty docker" || { FINAL_BIN="docker"; USE_TTY="-i"; }
 else
     FINAL_BIN="docker"
 fi
 
-# Run the container on the same network
 $FINAL_BIN run --rm $USE_TTY \
   -v "/$(pwd):/app" \
   --network piper-network \
@@ -78,7 +77,6 @@ chmod +x "$INSTALL_DIR/piper"
 
 # 5. ⚙️ STARTING DATABASE
 echo "⚙️  Starting Core Database..."
-docker rm -f piper-db 2>/dev/null || true
 echo "$COMPOSE_CONFIG" | docker-compose -f - up -d --remove-orphans
 
 echo "⏳ Waiting for Database..."
@@ -89,7 +87,6 @@ done
 
 # 6. HANDSHAKE
 echo -e "\n🚀 Running Core Initialization..."
-# Use the full path to ensure we use the wrapper we just made
 "$INSTALL_DIR/piper" init
 
 echo "------------------------------------------------"
