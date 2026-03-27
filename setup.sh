@@ -46,7 +46,7 @@ docker network create piper-global-network 2>/dev/null || true
 echo "🚚 Pulling Piper Engine..."
 docker pull ghcr.io/philz-dev/piper-engine:v1
 
-# 4. Global Command Setup (FIXED TTY LOGIC)
+# 4. Global Command Setup (FIXED TTY & DB LINK)
 cat <<'EOF' > ./piper_wrapper
 #!/bin/bash
 USE_TTY="-it"
@@ -57,14 +57,20 @@ if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
     if [ -t 0 ]; then
         FINAL_BIN="winpty docker"
     else
-        USE_TTY="-i" # Drop the 't' if no TTY (fixes the error)
+        USE_TTY="-i" 
     fi
 fi
 
-$FINAL_BIN run --rm $USE_TTY -v "/$(pwd):/app" --network piper-global-network --env-file .env ghcr.io/philz-dev/piper-engine:v1 "$@"
+# 🚀 THE FIX: Added --link piper-db:db so the CLI can find the database
+$FINAL_BIN run --rm $USE_TTY \
+  -v "/$(pwd):/app" \
+  --network piper-global-network \
+  --link piper-db:db \
+  --env-file .env \
+  ghcr.io/philz-dev/piper-engine:v1 "$@"
 EOF
 
-# Install to path (Hidden logic)
+# Install to path
 INSTALL_DIR="/usr/local/bin"
 [ ! -w "$INSTALL_DIR" ] && INSTALL_DIR="$HOME/piper_bin"
 mkdir -p "$INSTALL_DIR"
@@ -72,35 +78,27 @@ mv ./piper_wrapper "$INSTALL_DIR/piper"
 chmod +x "$INSTALL_DIR/piper"
 [[ ":$PATH:" != *":$INSTALL_DIR:"* ]] && export PATH="$PATH:$INSTALL_DIR"
 
-# 5. ⚙️ STARTING DATABASE (RAM ONLY)
+# 5. ⚙️ STARTING DATABASE
 echo "⚙️  Starting Core Database..."
 docker rm -f piper-db 2>/dev/null || true
-
-# Pipe RAM config to Docker
 echo "$COMPOSE_CONFIG" | docker-compose -f - up -d
 
 echo "⏳ Waiting for Database to wake up..."
 RETRIES=0
 set +e
 while true; do
-  # Check if container is actually running
   IS_RUNNING=$(docker ps -q -f name=piper-db)
-  
   if [ -n "$IS_RUNNING" ]; then
-    # Check if Postgres is accepting connections
     if docker exec piper-db pg_isready -U piper_admin >/dev/null 2>&1; then
       echo -e "\n✅ Database Ready!"
       break
     fi
   fi
-
   echo -n "."
   sleep 2
   ((RETRIES++))
-  
   if [ $RETRIES -gt 20 ]; then
-    echo -e "\n❌ Timeout. Printing logs for diagnosis:"
-    docker logs piper-db --tail 10
+    echo -e "\n❌ Timeout."
     exit 1
   fi
 done
