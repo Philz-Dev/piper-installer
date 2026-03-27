@@ -46,13 +46,22 @@ docker network create piper-global-network 2>/dev/null || true
 echo "🚚 Pulling Piper Engine..."
 docker pull ghcr.io/philz-dev/piper-engine:v1
 
-# 4. Global Command Setup
-DOCKER_BIN="docker"
-[[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]] && DOCKER_BIN="winpty docker"
-
-cat <<EOF > ./piper_wrapper
+# 4. Global Command Setup (FIXED TTY LOGIC)
+cat <<'EOF' > ./piper_wrapper
 #!/bin/bash
-$DOCKER_BIN run --rm -it -v "/\$(pwd):/app" --network piper-global-network --env-file .env ghcr.io/philz-dev/piper-engine:v1 "\$@"
+USE_TTY="-it"
+FINAL_BIN="docker"
+
+# Check if we are on Windows and if a real TTY is available
+if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
+    if [ -t 0 ]; then
+        FINAL_BIN="winpty docker"
+    else
+        USE_TTY="-i" # Drop the 't' if no TTY (fixes the error)
+    fi
+fi
+
+$FINAL_BIN run --rm $USE_TTY -v "/$(pwd):/app" --network piper-global-network --env-file .env ghcr.io/philz-dev/piper-engine:v1 "$@"
 EOF
 
 # Install to path (Hidden logic)
