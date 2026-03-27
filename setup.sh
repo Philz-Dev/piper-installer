@@ -10,12 +10,16 @@ echo "------------------------------------------------"
 
 # 1. ⚡ CREDENTIALS & RAM CONFIG ⚡
 if [ -f .env ]; then
-    DB_PASSWORD=$(grep DATABASE_URL .env | sed 's/.*:\(.*\)@.*/\1/')
+    # Ensure the host in the .env matches the container name 'piper-db'
+    if grep -q "@db:" .env; then
+        sed -i 's/@db:/@piper-db:/g' .env || true
+    fi
+    DB_PASSWORD=$(grep DATABASE_URL .env | sed -e 's|.*//[^:]*:\([^@]*\)@.*|\1|')
 else
     echo "📌 Generating fresh credentials..."
     DB_PASSWORD=$(openssl rand -hex 12 2>/dev/null || echo "piper_$(date +%s)")
-    # Using 'db' as the alias for maximum compatibility with the --link flag
-    echo "DATABASE_URL=postgresql://piper_admin:$DB_PASSWORD@db:5432/piper_data" > .env
+    # Using 'piper-db' as the primary host
+    echo "DATABASE_URL=postgresql://piper_admin:$DB_PASSWORD@piper-db:5432/piper_data" > .env
 fi
 
 COMPOSE_CONFIG=$(cat <<EOF
@@ -47,13 +51,13 @@ docker network create piper-global-network 2>/dev/null || true
 echo "🚚 Pulling Piper Engine..."
 docker pull ghcr.io/philz-dev/piper-engine:v1
 
-# 4. Global Command Setup (THE TTY & DNS LINK FIX)
+# 4. Global Command Setup (THE "SLEDGEHAMMER" IP FIX)
 cat <<'EOF' > ./piper_wrapper
 #!/bin/bash
 USE_TTY="-it"
 FINAL_BIN="docker"
 
-# Check if we are on Windows and if a real TTY is available
+# Handle Windows/TTY detection
 if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
     if [ -t 0 ]; then
         FINAL_BIN="winpty docker"
@@ -62,12 +66,20 @@ if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
     fi
 fi
 
-# 🚀 THE CRITICAL FIX: --link piper-db:db
-# This forces the temporary container to recognize 'db' as the database host.
+# 🚀 THE FIX: Dynamically fetch the DB's internal IP for direct mapping
+# This bypasses the 'could not translate host name' error on Windows/Docker networks.
+DB_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' piper-db 2>/dev/null || echo "")
+
+# If we found the IP, we force-map 'db' and 'piper-db' directly into the new container's hosts file
+ADD_HOST=""
+if [ -n "$DB_IP" ]; then
+    ADD_HOST="--add-host=db:$DB_IP --add-host=piper-db:$DB_IP"
+fi
+
 $FINAL_BIN run --rm $USE_TTY \
   -v "/$(pwd):/app" \
   --network piper-global-network \
-  --link piper-db:db \
+  $ADD_HOST \
   --env-file .env \
   ghcr.io/philz-dev/piper-engine:v1 "$@"
 EOF
