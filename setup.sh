@@ -3,37 +3,46 @@
 set -e
 export MSYS_NO_PATHCONV=1
 
-# 🟢 REPO CONFIG (Change this to your actual GitHub URL)
+# 🟢 REPO CONFIG (Update this!)
 REPO_URL="https://github.com/philz-dev/piper-engine.git"
 
 echo "------------------------------------------------"
 echo "   PIPER ENGINE: Universal System Initialization "
 echo "------------------------------------------------"
 
-# 1. 📂 CLONE CHECK (For curl | bash users)
+# 1. 🐧 LINUX/VPS DEPENDENCY CHECK
+if [[ "$OSTYPE" != "msys" && "$OSTYPE" != "cygwin" ]]; then
+    if ! command -v docker >/dev/null 2>&1; then
+        echo "🐳 Docker not found. Installing..."
+        curl -fsSL https://get.docker.com | sh
+        sudo usermod -aG docker $USER
+        echo "✅ Docker installed. Please log out and back in if this is a fresh VPS."
+    fi
+fi
+
+# 2. 📂 CLONE CHECK (For curl | bash users)
 if [ ! -d "src" ]; then
     echo "📦 Repository components missing. Cloning from GitHub..."
     if command -v git >/dev/null 2>&1; then
         git clone "$REPO_URL" .
     else
-        echo "❌ Error: git is not installed. Please install git first."
+        echo "❌ Error: git is not installed."
         exit 1
     fi
 fi
 
-# 2. 🌍 OS-AWARE PATH CAPTURE
+# 3. 🌍 OS-AWARE PATH CAPTURE
 if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
     HOST_PWD=$(pwd -W)
     DOCKER_SOCK="//var/run/docker.sock"
     EXTRA_VOLUMES="- /c/Users:/c/Users"
 else
-    # Standard Linux / VPS / Mac
     HOST_PWD=$(pwd)
     DOCKER_SOCK="/var/run/docker.sock"
     EXTRA_VOLUMES=""
 fi
 
-# 3. ⚡ CREDENTIALS
+# 4. ⚡ CREDENTIALS
 if [ -f .env ]; then
     DB_PASSWORD=$(grep DATABASE_URL .env | sed -e 's|.*//[^:]*:\([^@]*\)@.*|\1|')
 else
@@ -42,17 +51,16 @@ else
     echo "DATABASE_URL=postgresql://piper_admin:$DB_PASSWORD@db:5432/piper_data" > .env
 fi
 
-# Sync host path for Master Engine
 sed -i "/HOST_PROJECT_PATH/d" .env || true
 echo "HOST_PROJECT_PATH=$HOST_PWD" >> .env
 
-# 4. 🧹 CLEANUP
+# 5. 🧹 CLEANUP
 echo "🧹 Cleaning up existing system components..."
 docker rm -f piper-db piper-engine-master 2>/dev/null || true
 docker network rm piper-network 2>/dev/null || true
 docker network create piper-network
 
-# 5. 🏗️ MERGED COMPOSE CONFIG
+# 6. 🏗️ MERGED COMPOSE CONFIG
 COMPOSE_CONFIG=$(cat <<EOF
 services:
   db:
@@ -99,14 +107,20 @@ networks:
 EOF
 )
 
-# 6. 📥 LAUNCH CORE
+# 7. 📥 LAUNCH CORE
 echo "⚙️ Starting Core Services..."
-echo "$COMPOSE_CONFIG" | docker-compose -f - up -d --remove-orphans
+# Detect if using 'docker compose' (plugin) or 'docker-compose' (standalone)
+if docker compose version >/dev/null 2>&1; then
+    COMPOSE_CMD="docker compose"
+else
+    COMPOSE_CMD="docker-compose"
+fi
+echo "$COMPOSE_CONFIG" | $COMPOSE_CMD -f - up -d --remove-orphans
 
-# 7. ⏳ DATABASE HANDSHAKE
+# 8. ⏳ DATABASE HANDSHAKE
 until docker exec piper-db pg_isready -U piper_admin >/dev/null 2>&1; do sleep 1; done
 
-# 8. 🔗 DYNAMIC CLI WRAPPER
+# 9. 🔗 DYNAMIC CLI WRAPPER
 echo -e "\n🔗 Finalizing Global CLI..."
 INSTALL_DIR="$HOME/piper_bin"
 mkdir -p "$INSTALL_DIR"
@@ -121,7 +135,6 @@ if [ -z "$CORE_PATH" ]; then
     exit 1
 fi
 
-# Pre-clean client if running 'start'
 if [ "$1" == "start" ]; then
     CLIENT=$(echo "$@" | grep -oP '(?<=-c )[^ ]+|(?<=--client )[^ ]+')
     if [ -n "$CLIENT" ]; then
@@ -144,5 +157,4 @@ fi
 
 echo "------------------------------------------------"
 echo "✅ SUCCESS: Piper Engine Online"
-echo "✅ Location: $HOST_PWD"
 echo "------------------------------------------------"
